@@ -1,0 +1,2 @@
+config:
+  gcp-oidc-multi:gcpProjectIds: ["pulumi-ce-team"]

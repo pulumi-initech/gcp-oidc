@@ -1,0 +1,122 @@
+import * as pulumi from "@pulumi/pulumi";
+import * as gcp from "@pulumi/gcp";
+import * as YAML from "yaml";
+import * as random from "@pulumi/random";
+
+const config = new pulumi.Config();
+const gcpConfig = new pulumi.Config("gcp");
+
+// The default assumes that this stack is run in the same Pulumi org in which the oidc env is being configured.
+// If not, set the escEnvOrg config to the name of the org where the environment is going to be configured.
+const org = config.get("escEnvOrg") || pulumi.getOrganization()
+const gcpProjectId = gcpConfig.require("project");
+
+// Enable protect on all the resources
+pulumi.runtime.registerStackTransformation((args) => {
+    args.opts["protect"] = true
+    return { props: args.props, opts: args.opts }
+});
+
+// Main ESC env for OIDC
+const escOidcEnvName = "gcp-access" 
+
+// naming convention
+const name = `${org}-${escOidcEnvName}`;
+const emailName = name.replace("-", "");
+
+const randomSuffix = new random.RandomString(`${name}-randomSuffix`, {
+    length: 5,
+    lower: true,
+    upper: false,
+    special: false
+});
+
+// needs random suffix because it only soft deletes and will auto-purge after 30 days but you can't force a delete
+const identityPool = new gcp.iam.WorkloadIdentityPool(`${name}-identityPool`, {
+    workloadIdentityPoolId: pulumi.interpolate`${name}-${randomSuffix.result}`
+})
+
+const oidcProvider = new gcp.iam.WorkloadIdentityPoolProvider(`${name}-oidcProvider`, {
+    workloadIdentityPoolId: identityPool.workloadIdentityPoolId,
+    workloadIdentityPoolProviderId: "pulumi-cloud-pequod-oidc",
+    oidc: {
+        issuerUri: "https://api.pulumi.com/oidc",
+        allowedAudiences: [
+            "pequod"
+        ]
+    },
+    attributeMapping: {
+        "google.subject": "assertion.sub"
+    }
+});
+
+const serviceAccount = new gcp.serviceaccount.Account(`${name}-serviceAccount`, {
+    accountId: emailName,
+    project: gcpProjectId
+});
+
+const iamMember = new gcp.projects.IAMMember(`${name}-serviceAccount`, {
+    member: pulumi.interpolate`serviceAccount:${serviceAccount.email}`,
+    role: "roles/editor",
+    project: gcpProjectId
+});
+
+const iamPolicyBinding = new gcp.serviceaccount.IAMBinding(`${name}-iambinding`, {
+    serviceAccountId: serviceAccount.id,
+    role: "roles/iam.workloadIdentityUser",
+    members: [pulumi.interpolate`principalSet://iam.googleapis.com/${identityPool.name}/*`]
+});
+
+// fn::open::gcp-login requires project number instead of project name and needs it to be a number in the YAML
+const projectNumber = gcp.projects.getProjectOutput({
+    filter: `name:${gcpProjectId}`
+}).projects[0].number
+    .apply(projectNumber => +projectNumber); // this casts it from string to a number
+
+const envJson = pulumi
+    .all([oidcProvider.workloadIdentityPoolId, 
+        oidcProvider.workloadIdentityPoolProviderId, 
+        serviceAccount.email,
+        projectNumber,
+        gcpProjectId
+    ])
+    .apply(([
+        workloadIdentityPoolId, 
+        workloadIdentityPoolProviderId, 
+        serviceAccountEmail, 
+        projectNumber,
+        projectName
+    ]) => {
+        return {
+            'values': {
+                'gcp': {
+                    'projectName': projectName,
+                    'login': {
+                        'fn::open::gcp-login': {
+                            'project': projectNumber,
+                            'oidc': {
+                                'workloadPoolId': workloadIdentityPoolId,
+                                'providerId': workloadIdentityPoolProviderId,
+                                'serviceAccount': serviceAccountEmail
+                            }
+                        }
+                    }
+                },
+                'environmentVariables': {
+                    'GOOGLE_PROJECT': '${gcp.login.project}'
+                },
+                'pulumiConfig': {
+                    'gcp:accessToken': '${gcp.login.accessToken}',
+                    'gcp:project': '${gcp.projectName}'
+                }
+            }
+        }
+    });
+
+// Output a YAML doc based on the above JSON that can be copied into the Pulumi environment
+envJson.apply(envJson => {
+    console.log(`Copy/paste this output BETWEEN "#######" into an environment named, ${escOidcEnvName} in the ${org} Pulumi organization.`)
+    console.log("#####################")
+    console.log(YAML.stringify(envJson))
+    console.log("#####################")
+});
