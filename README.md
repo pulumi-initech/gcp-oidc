@@ -115,51 +115,12 @@ pulumi config env init my-org/my-project/my-environment
 
 ### Manual ESC Conversion
 
-Alternatively, create an ESC environment manually:
+Alternatively, create an ESC environment, which will convert the existing stack config into an ESC environement:
 
 1. **Create the ESC environment:**
 
 ```bash
-pulumi env init my-org/gcp-config/multi-project
-```
-
-2. **Edit the environment:**
-
-```bash
-pulumi env edit my-org/gcp-config/multi-project
-```
-
-3. **Add your configuration:**
-
-```yaml
-values:
-  gcpProjectIds:
-    - my-gcp-project-1
-    - my-gcp-project-2
-    - my-gcp-project-3
-  escEnvOrg: my-pulumi-org
-  escEnvProject: gcloud
-  pulumiConfig:
-    gcp-oidc-multi:gcpProjectIds: ${gcpProjectIds}
-    gcp-oidc-multi:escEnvOrg: ${escEnvOrg}
-    gcp-oidc-multi:escEnvProject: ${escEnvProject}
-```
-
-4. **Import the environment in your stack:**
-
-Edit `Pulumi.<stack-name>.yaml`:
-
-```yaml
-environment:
-  - my-org/gcp-config/multi-project
-```
-
-5. **Remove local config values:**
-
-```bash
-pulumi config rm gcpProjectIds
-pulumi config rm escEnvOrg
-pulumi config rm escEnvProject
+pulumi config env init
 ```
 
 ### Benefits of Using ESC
